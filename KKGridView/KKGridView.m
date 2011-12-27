@@ -12,6 +12,7 @@
 #import <KKGridView/KKGridViewUpdate.h>
 #import <KKGridView/KKGridViewUpdateStack.h>
 #import <KKGridView/KKGridViewCell.h>
+#import <KKGridView/KKGridViewIndexView.h>
 
 #define KKGridViewDefaultAnimationStaggerInterval 0.025
 
@@ -27,9 +28,11 @@ struct KKSectionMetrics {
     NSMutableArray *_footerViews;
     NSMutableArray *_headerViews;
     
-    // Metrics - C arrays are used to improve performance
-    struct KKSectionMetrics *_metrics;
-    NSUInteger _metricsCount;
+    // Metrics
+    struct KKMetricsArray {
+        struct KKSectionMetrics * const sections;
+        NSUInteger const count;
+    } _metrics;
     
     // Cell containers
     NSMutableDictionary *_reusableCells;
@@ -39,7 +42,7 @@ struct KKSectionMetrics {
     NSMutableSet *_selectedIndexPaths;
     UILongPressGestureRecognizer *_selectionRecognizer;
     
-    KKIndexPath *_lastHighlightedItem;
+    KKIndexPath *_highlightedIndexPath;
     
     // Relating to updates/layout changes
     BOOL _markedForDisplay; // Relayout or not
@@ -56,6 +59,8 @@ struct KKSectionMetrics {
         unsigned int heightForFooter:1;
         unsigned int viewForHeader:1;
         unsigned int viewForFooter:1;
+        unsigned int sectionIndexTitles:1;
+        unsigned int sectionForSectionIndexTitle:1;
     } _dataSourceRespondsTo;
     
     struct {
@@ -65,6 +70,8 @@ struct KKSectionMetrics {
         unsigned int willDeselectItem:1;
         unsigned int willDisplayCell:1;
     } _delegateRespondsTo;
+    
+    KKGridViewIndexView *_indexView;
 }
 
 // Initialization
@@ -72,6 +79,7 @@ struct KKSectionMetrics {
 
 // Reloading
 - (void)_reloadMetrics;
+- (void)_cleanupMetrics;
 - (void)_commonReload;
 - (void)_softReload;
 
@@ -107,6 +115,8 @@ struct KKSectionMetrics {
 // Selection & Highlighting
 - (void)_selectItemAtIndexPath:(KKIndexPath *)indexPath;
 - (void)_deselectItemAtIndexPath:(KKIndexPath *)indexPath;
+- (void)_highlightItemAtIndexPath:(KKIndexPath *)indexPath;
+- (void)_cancelHighlighting;
 - (void)_handleSelection:(UILongPressGestureRecognizer *)recognizer;
 
 // Headers and Footer views
@@ -174,6 +184,7 @@ struct KKSectionMetrics {
     _selectionRecognizer = [[UILongPressGestureRecognizer alloc] initWithTarget:self action:@selector(_handleSelection:)];
     _selectionRecognizer.minimumPressDuration = 0.01;
     _selectionRecognizer.delegate = self;
+    _selectionRecognizer.cancelsTouchesInView = NO;
     [self addGestureRecognizer:_selectionRecognizer];
     
     
@@ -190,9 +201,7 @@ struct KKSectionMetrics {
 - (void)dealloc
 {
     [self removeGestureRecognizer:_selectionRecognizer];
-    
-    if (_metrics)
-        free(_metrics);
+    [self _cleanupMetrics];
 }
 
 #pragma mark - Setters
@@ -209,6 +218,8 @@ struct KKSectionMetrics {
         _dataSourceRespondsTo.heightForFooter = [_dataSource respondsToSelector:@selector(gridView:heightForFooterInSection:)];
         _dataSourceRespondsTo.viewForHeader = [_dataSource respondsToSelector:@selector(gridView:viewForHeaderInSection:)];
         _dataSourceRespondsTo.viewForFooter = [_dataSource respondsToSelector:@selector(gridView:viewForFooterInSection:)];
+        _dataSourceRespondsTo.sectionIndexTitles = [_dataSource respondsToSelector:@selector(sectionIndexTitlesForGridView:)];
+        _dataSourceRespondsTo.sectionForSectionIndexTitle = [_dataSource respondsToSelector:@selector(gridView:sectionForSectionIndexTitle:atIndex:)];
         [self reloadData];
     }
 }
@@ -222,7 +233,7 @@ struct KKSectionMetrics {
         _delegateRespondsTo.willSelectItem = [_gridDelegate respondsToSelector:@selector(gridView:willSelectItemAtIndexPath:)];
         _delegateRespondsTo.didDeselectItem = [_gridDelegate respondsToSelector:@selector(gridView:didDeselectItemAtIndexPath:)];
         _delegateRespondsTo.willDeselectItem = [_gridDelegate respondsToSelector:@selector(gridView:willDeselectItemAtIndexPath:)];
-        _delegateRespondsTo.willDisplayCell = [_gridDelegate respondsToSelector:@selector(gridView:willDisplayCellAtIndexPath:)];
+        _delegateRespondsTo.willDisplayCell = [_gridDelegate respondsToSelector:@selector(gridView:willDisplayCell:atIndexPath:)];
     }
 }
 
@@ -353,7 +364,7 @@ struct KKSectionMetrics {
         f.size.width = visibleBounds.size.width;
         CGFloat sectionY = footer->stickPoint;
         // height of current section without height of footerView itself
-        CGFloat heightOfSection = _metrics[footer->section].sectionHeight - f.size.height;
+        CGFloat heightOfSection = _metrics.sections[footer->section].sectionHeight - f.size.height;
         // for footerViews we have to work with the bottom of the screen
         CGFloat screenBottom = offset + visibleBounds.size.height;
         
@@ -375,10 +386,6 @@ struct KKSectionMetrics {
                     f.origin.y = sectionTwoY + sectionTwoHeight;
                 }
             }
-            
-            // move footer view to right below scroller
-            [footer.view removeFromSuperview];
-            [self insertSubview:footer.view atIndex:self.subviews.count - 1];
         } else {
             // footer isn't sticky anymore, set originTop to saved position
             f.origin.y = footer->stickPoint;
@@ -500,7 +507,7 @@ struct KKSectionMetrics {
             [self reloadContentSize];
             
             for (NSUInteger section = 0; section < _numberOfSections; section++) {
-                struct KKSectionMetrics sectionMetrics = _metrics[section];
+                struct KKSectionMetrics sectionMetrics = _metrics.sections[section];
                 
                 KKGridViewHeader *header = nil;
                 if (_headerViews.count > section && (header = [_headerViews objectAtIndex:section])) {
@@ -591,8 +598,8 @@ struct KKSectionMetrics {
 - (CGFloat)_sectionHeightsCombinedUpToSection:(NSUInteger)section
 {
     CGFloat height = 0.f;
-    for (NSUInteger index = 0; index < section && index < _numberOfSections; index++) {
-        height += _metrics[index].sectionHeight;
+    for (NSUInteger index = 0; index < section && index < _metrics.count; index++) {
+        height += _metrics.sections[index].sectionHeight;
     }
     return height;
 }
@@ -601,9 +608,9 @@ struct KKSectionMetrics {
 {
     CGFloat height = 0.f;
     
-    if (_metricsCount > section)
+    if (_metrics.count > section)
     {
-        struct KKSectionMetrics sectionMetrics = _metrics[section];
+        struct KKSectionMetrics sectionMetrics = _metrics.sections[section];
         
         if (_numberOfSections > section) {
             height += sectionMetrics.headerHeight;
@@ -742,14 +749,14 @@ struct KKSectionMetrics {
     
     for (NSUInteger section = 0; section < indexPath.section; section++) {
         if (_numberOfSections > 0) {
-            point.y += _metrics[section].sectionHeight;
+            point.y += _metrics.sections[section].sectionHeight;
         } else {
             point.y += [self _heightForSection:section];
         }
     }
     
     if (indexPath.section < _numberOfSections) {
-        point.y += _metrics[indexPath.section].headerHeight;
+        point.y += _metrics.sections[indexPath.section].headerHeight;
     }
     
     NSInteger row = floor(indexPath.index / _numberOfColumns);
@@ -983,13 +990,13 @@ struct KKSectionMetrics {
             _headerViews = [[NSMutableArray alloc] initWithCapacity:_numberOfSections];
         }
         
-        for (NSUInteger section = 0; section < _numberOfSections; section++) {
+        for (NSUInteger section = 0; section < _metrics.count; section++) {
             UIView *view = [self _viewForHeaderInSection:section];
             KKGridViewHeader *header = [[KKGridViewHeader alloc] initWithView:view];
             [_headerViews addObject:header];
             
             CGFloat position = [self _sectionHeightsCombinedUpToSection:section] + _gridHeaderView.frame.size.height;
-            [self _configureAuxiliaryView:header inSection:section withStickPoint:position height:_metrics[section].headerHeight];
+            [self _configureAuxiliaryView:header inSection:section withStickPoint:position height:_metrics.sections[section].headerHeight];
             
             [self addSubview:header.view];
         }
@@ -1002,16 +1009,43 @@ struct KKSectionMetrics {
             _footerViews = [[NSMutableArray alloc] initWithCapacity:_numberOfSections];
         }
         
-        for (NSUInteger section = 0; section < _numberOfSections; section++) {
+        for (NSUInteger section = 0; section < _metrics.count; section++) {
             UIView *view = [self _viewForFooterInSection:section];
             KKGridViewFooter *footer = [[KKGridViewFooter alloc] initWithView:view];
             [_footerViews addObject:footer];
             
-            CGFloat footerHeight = _metrics[section].footerHeight;
+            CGFloat footerHeight = _metrics.sections[section].footerHeight;
             CGFloat position = [self _sectionHeightsCombinedUpToSection:section+1] + _gridHeaderView.frame.size.height - footerHeight;
             [self _configureAuxiliaryView:footer inSection:section withStickPoint:position height:footerHeight];
             
             [self addSubview:footer.view];
+        }
+    }
+    
+    // IndexView
+    if (_dataSourceRespondsTo.sectionIndexTitles) {
+        if (_indexView)
+            [_indexView removeFromSuperview];
+        
+        NSArray *indexes = [_dataSource sectionIndexTitlesForGridView:self];
+        if (indexes && [indexes isKindOfClass:[NSArray class]] && [indexes count]) {
+            _indexView = [[KKGridViewIndexView alloc] initWithFrame:CGRectZero];
+            [_indexView setSectionIndexTitles:indexes];
+            
+            __unsafe_unretained KKGridView *weakSelf = self;
+            [_indexView setSectionTracked:^(NSUInteger section) {
+                KKGridView *strongSelf = weakSelf;
+  
+                NSUInteger sectionToScroll = section;
+                if (strongSelf->_dataSourceRespondsTo.sectionForSectionIndexTitle)
+                    sectionToScroll = [strongSelf->_dataSource gridView:strongSelf
+                                            sectionForSectionIndexTitle:[indexes objectAtIndex:section] atIndex:section];
+                
+                [strongSelf scrollToItemAtIndexPath:[KKIndexPath indexPathForIndex:0. inSection:sectionToScroll] animated:NO position:KKGridViewScrollPositionTop]; 
+            }];
+
+            [self addSubview:_indexView];
+            [self bringSubviewToFront:_indexView];   
         }
     }
 }
@@ -1050,9 +1084,9 @@ struct KKSectionMetrics {
     
     CGSize newContentSize = CGSizeMake(self.bounds.size.width, _gridHeaderView.frame.size.height + _gridFooterView.frame.size.height);
     
-    for (NSUInteger i = 0; i < _numberOfSections; ++i) {
+    for (NSUInteger i = 0; i < _metrics.count; ++i) {
         CGFloat heightForSection = [self _heightForSection:i];
-        _metrics[i].sectionHeight = heightForSection;
+        _metrics.sections[i].sectionHeight = heightForSection;
         newContentSize.height += heightForSection;
     }
     
@@ -1063,30 +1097,54 @@ struct KKSectionMetrics {
 {
     _numberOfSections = _dataSourceRespondsTo.numberOfSections ? [_dataSource numberOfSectionsInGridView:self] : 1;
     
-    if (_metrics)
-        free(_metrics);
+    // If the _metrics.sections array has the right number of items in it,
+    // then we can edit it in place (and don't need to allocate a new array 
+    // each time. If it is not the right size, then we'll wipe it out and 
+    // start over.
+    BOOL arrayIsCorrectSize = _metrics.count == _numberOfSections;
     
-    _metrics = (struct KKSectionMetrics *)calloc(_numberOfSections, sizeof(struct KKSectionMetrics));
-    _metricsCount = 0;
+    struct KKSectionMetrics *metricsArray = _metrics.sections;
     
-    for (_metricsCount = 0; _metricsCount < _numberOfSections; _metricsCount++)
+    if (!arrayIsCorrectSize)
     {
+        [self _cleanupMetrics];
+        metricsArray = (struct KKSectionMetrics *)calloc(_numberOfSections, sizeof(struct KKSectionMetrics));
+    }
+    
+    
+    NSUInteger index;
+    for (index = 0; index < _numberOfSections; ++index)
+    {
+        BOOL willDrawHeader = _dataSourceRespondsTo.viewForHeader || _dataSourceRespondsTo.titleForHeader;
+        BOOL willDrawFooter = _dataSourceRespondsTo.viewForFooter || _dataSourceRespondsTo.titleForFooter;
+        
         struct KKSectionMetrics sectionMetrics = { 
-            .footerHeight = 25.f,
-            .headerHeight = 25.f,
+            .footerHeight = willDrawFooter ? 25.0 : 0.0,
+            .headerHeight = willDrawHeader ? 25.0 : 0.0,
             .sectionHeight = 0.f,
             .itemCount = 0.f
         };
         
-        sectionMetrics.itemCount = [_dataSource gridView:self numberOfItemsInSection:_metricsCount];
+        sectionMetrics.itemCount = [_dataSource gridView:self numberOfItemsInSection:index];
         
         if (_dataSourceRespondsTo.heightForHeader)
-            sectionMetrics.headerHeight = [_dataSource gridView:self heightForHeaderInSection:_metricsCount];
+            sectionMetrics.headerHeight = [_dataSource gridView:self heightForHeaderInSection:index];
         if (_dataSourceRespondsTo.heightForFooter)
-            sectionMetrics.footerHeight = [_dataSource gridView:self heightForFooterInSection:_metricsCount];
+            sectionMetrics.footerHeight = [_dataSource gridView:self heightForFooterInSection:index];
         
-        _metrics[_metricsCount] = sectionMetrics;
+        metricsArray[index] = sectionMetrics;
     }
+    
+    if (!arrayIsCorrectSize)
+        _metrics = (struct KKMetricsArray){ metricsArray, index };    
+}
+
+- (void)_cleanupMetrics
+{
+    if (_metrics.sections)
+        free(_metrics.sections);
+    
+    _metrics = (struct KKMetricsArray){ NULL, 0 };
 }
 
 #pragma mark - Header and Footer Views
@@ -1151,10 +1209,10 @@ struct KKSectionMetrics {
     
     switch (scrollPosition) {
         case KKGridViewScrollPositionTop:
-            verticalOffset = CGRectGetMinY(cellRect) + self.contentInset.top;
+            verticalOffset = CGRectGetMinY(cellRect) + self.contentInset.top - _metrics.sections[indexPath.section].headerHeight - self.cellPadding.height;
             break;
         case KKGridViewScrollPositionBottom:
-            verticalOffset = CGRectGetMaxY(cellRect) - boundsHeight;
+            verticalOffset = CGRectGetMaxY(cellRect) - boundsHeight + _metrics.sections[indexPath.section].headerHeight + self.cellPadding.height;
             break;
         case KKGridViewScrollPositionMiddle:
             verticalOffset = CGRectGetMaxY(cellRect) - (boundsHeight * .5f);
@@ -1223,27 +1281,29 @@ struct KKSectionMetrics {
 
 - (void)_highlightItemAtIndexPath:(KKIndexPath *)indexPath
 {
-    [self _unhighlightAllItems];
+    [self _cancelHighlighting];
     
-    _lastHighlightedItem = indexPath;
+    _highlightedIndexPath = indexPath;
     KKGridViewCell *cell = [_visibleCells objectForKey:indexPath];
     cell.highlighted = YES;
 }
 
-- (void)_unhighlightAllItems
+- (void)_cancelHighlighting
 {
-    for (KKIndexPath *path in _visibleCells)
-    {
-        KKGridViewCell *cell = [_visibleCells objectForKey:path];
-        cell.highlighted = NO;
-    }
+    if (!_highlightedIndexPath)
+        return;
+    
+    KKGridViewCell *cell = [_visibleCells objectForKey:_highlightedIndexPath];
+    cell.highlighted = NO;
+    
+    _highlightedIndexPath = nil;
 }
 
 - (void)_selectItemAtIndexPath:(KKIndexPath *)indexPath
 {
     KKGridViewCell *cell = [_visibleCells objectForKey:indexPath];
     
-    [self _unhighlightAllItems];
+    [self _cancelHighlighting];
     
     if (_allowsMultipleSelection) {
         if ([_selectedIndexPaths containsObject:indexPath]) {
@@ -1290,14 +1350,35 @@ struct KKSectionMetrics {
 #pragma mark - Touch Handling
 
 - (void)_handleSelection:(UILongPressGestureRecognizer *)recognizer
-{
+{    
+    if (_indexView) {
+        if (CGRectContainsPoint(_indexView.frame, [recognizer locationInView:self]) &&
+            recognizer.state == UIGestureRecognizerStateBegan) {
+            [self setScrollEnabled:NO];
+            [_indexView setTracking:YES location:[recognizer locationInView:_indexView]];
+            return;
+        }
+        else if (recognizer.state == UIGestureRecognizerStateChanged && _indexView.tracking) {
+            [_indexView setTracking:YES location:CGPointMake(0.0, [recognizer locationInView:_indexView].y)];
+            return;
+        }
+        else if (recognizer.state == UIGestureRecognizerStateEnded || recognizer.state == UIGestureRecognizerStateCancelled) {
+            [self setScrollEnabled:YES];
+            [_indexView setTracking:NO location:[recognizer locationInView:_indexView]];
+            return;
+        }
+    }
+ 
+    if ([self isDecelerating])
+        return;
+    
     KKIndexPath *indexPath = [self indexPathForItemAtPoint:[recognizer locationInView:self]];
     
     if (_delegateRespondsTo.willSelectItem)
         indexPath = [_gridDelegate gridView:self willSelectItemAtIndexPath:indexPath];
     
     if (indexPath.index == NSNotFound || indexPath.section == NSNotFound) {
-        [self _unhighlightAllItems];
+        [self _cancelHighlighting];
         return;
     }
     
@@ -1306,9 +1387,10 @@ struct KKSectionMetrics {
     }
     
     else if (recognizer.state == UIGestureRecognizerStateEnded) {
-        if (CGRectContainsPoint([self rectForCellAtIndexPath:_lastHighlightedItem], [recognizer locationInView:self]))
+        BOOL touchInSameCell = CGRectContainsPoint([self rectForCellAtIndexPath:_highlightedIndexPath], [recognizer locationInView:self]);
+        if (touchInSameCell && ![self isDragging])
             [self _selectItemAtIndexPath:indexPath];
-        [self _unhighlightAllItems];
+        [self _cancelHighlighting];
     }
 }
 
@@ -1324,7 +1406,15 @@ struct KKSectionMetrics {
 
 - (void)scrollViewWillBeginDragging:(UIScrollView *)scrollView
 {
-    [self _unhighlightAllItems];
+    [self _cancelHighlighting];
+}
+
+- (void)scrollViewDidScroll:(UIScrollView *)scrollView {
+    if (_indexView)
+        [_indexView setFrame:CGRectMake(_indexView.frame.origin.x,
+                                        scrollView.contentOffset.y,
+                                        _indexView.frame.size.width,
+                                        _indexView.frame.size.height)];
 }
 
 @end
