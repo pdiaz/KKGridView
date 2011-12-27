@@ -108,7 +108,6 @@ struct KKSectionMetrics {
 - (void)_selectItemAtIndexPath:(KKIndexPath *)indexPath;
 - (void)_deselectItemAtIndexPath:(KKIndexPath *)indexPath;
 - (void)_handleSelection:(UILongPressGestureRecognizer *)recognizer;
-- (void)_unhighlightAllItems;
 
 // Headers and Footer views
 - (UIView *)_viewForHeaderInSection:(NSUInteger)section;
