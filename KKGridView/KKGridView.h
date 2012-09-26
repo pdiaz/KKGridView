@@ -11,13 +11,6 @@
 #import <KKGridView/Definitions.h>
 
 typedef enum {
-    KKGridViewScrollPositionNone,        
-    KKGridViewScrollPositionTop,    
-    KKGridViewScrollPositionMiddle,   
-    KKGridViewScrollPositionBottom
-} KKGridViewScrollPosition;
-
-typedef enum {
     KKGridViewAnimationFade,
     KKGridViewAnimationResize,
     KKGridViewAnimationSlideLeft,
@@ -29,62 +22,19 @@ typedef enum {
     KKGridViewAnimationNone
 } KKGridViewAnimation;
 
-@protocol KKGridViewDataSource;
-@protocol KKGridViewDelegate;
+typedef enum {
+    KKGridViewLayoutDirectionVertical,
+    KKGridViewLayoutDirectionHorizontal
+} KKGridViewLayoutDirection;
 
-@interface KKGridView : UIScrollView
+typedef enum {
+    KKGridViewScrollPositionNone,        
+    KKGridViewScrollPositionTop,    
+    KKGridViewScrollPositionMiddle,   
+    KKGridViewScrollPositionBottom
+} KKGridViewScrollPosition;
 
-#pragma mark - Properties
-
-@property (nonatomic) BOOL allowsMultipleSelection;
-@property (nonatomic, strong) UIView *backgroundView;
-@property (nonatomic) CGSize cellPadding;
-@property (nonatomic) CGSize cellSize;
-@property (nonatomic, strong) UIView *gridFooterView;
-@property (nonatomic, strong) UIView *gridHeaderView;
-@property (nonatomic, readonly) NSUInteger numberOfColumns;
-@property (nonatomic, readonly) NSUInteger numberOfSections;
-
-#pragma mark - Data Source and Delegate
-@property (nonatomic, __kk_weak) id <KKGridViewDataSource> dataSource;
-@property (nonatomic, __kk_weak) id <KKGridViewDelegate> gridDelegate;
-
-#pragma mark - Getters
-
-- (KKGridViewCell *)dequeueReusableCellWithIdentifier:(NSString *)identifier;
-- (CGRect)rectForCellAtIndexPath:(KKIndexPath *)indexPath;
-- (NSArray *)visibleIndexPaths;
-
-#pragma mark - Reloading
-
-- (void)reloadContentSize;
-- (void)reloadData;
-
-#pragma mark - Items
-
-- (void)reloadItemsAtIndexPaths:(NSArray *)indexPaths;
-- (void)insertItemsAtIndexPaths:(NSArray *)indexPaths withAnimation:(KKGridViewAnimation)animation;
-- (void)deleteItemsAtIndexPaths:(NSArray *)indexPaths withAnimation:(KKGridViewAnimation)animation;
-- (void)moveItemAtIndexPath:(KKIndexPath *)indexPath toIndexPath:(KKIndexPath *)newIndexPath;
-- (void)scrollToItemAtIndexPath:(KKIndexPath *)indexPath animated:(BOOL)animated position:(KKGridViewScrollPosition)scrollPosition;
-
-#pragma mark - Unimplemented
-
-//- (void)insertSections:(NSIndexSet *)sections withItemAnimation:(KKGridViewAnimation)animation;
-//- (void)deleteSections:(NSIndexSet *)sections withItemAnimation:(KKGridViewAnimation)animation;
-//- (void)reloadSections:(NSIndexSet *)sections withAnimation:(KKGridViewAnimation)animation;
-
-
-#pragma mark - Selection
-
-- (void)selectItemsAtIndexPaths:(NSArray *)indexPaths animated:(BOOL)animated;
-- (void)deselectItemsAtIndexPaths:(NSArray *)indexPaths animated:(BOOL)animated;
-
-- (KKIndexPath *)indexPathForSelectedCell;
-- (NSArray *)indexPathsForSelectedCells;
-
-@end
-
+@class KKGridView;
 
 @protocol KKGridViewDataSource <NSObject>
 @required
@@ -98,15 +48,81 @@ typedef enum {
 - (CGFloat)gridView:(KKGridView *)gridView heightForFooterInSection:(NSUInteger)section;
 - (UIView *)gridView:(KKGridView *)gridView viewForHeaderInSection:(NSUInteger)section;
 - (UIView *)gridView:(KKGridView *)gridView viewForFooterInSection:(NSUInteger)section;
+- (UIView *)gridView:(KKGridView *)gridView viewForRow:(NSUInteger)row inSection:(NSUInteger)section; // a row is compromised of however many cells fit in a column of a given section
 - (NSArray *)sectionIndexTitlesForGridView:(KKGridView *)gridView;
 - (NSInteger)gridView:(KKGridView *)gridView sectionForSectionIndexTitle:(NSString *)title atIndex:(NSInteger)index;
 @end
 
-@protocol KKGridViewDelegate <NSObject>
+@protocol KKGridViewDelegate <NSObject, UIScrollViewDelegate>
 @optional
 - (void)gridView:(KKGridView *)gridView didSelectItemAtIndexPath:(KKIndexPath *)indexPath;
 - (void)gridView:(KKGridView *)gridView didDeselectItemAtIndexPath:(KKIndexPath *)indexPath;
 - (KKIndexPath *)gridView:(KKGridView *)gridView willSelectItemAtIndexPath:(KKIndexPath *)indexPath;
 - (KKIndexPath *)gridView:(KKGridView *)gridView willDeselectItemAtIndexPath:(KKIndexPath *)indexPath;
 - (void)gridView:(KKGridView *)gridView willDisplayCell:(KKGridViewCell *)cell atIndexPath:(KKIndexPath *)indexPath;
+@end
+
+@interface KKGridView : UIScrollView
+
+#pragma mark - Properties
+
+@property (nonatomic) BOOL allowsMultipleSelection;
+@property (nonatomic, strong) UIView *backgroundView;
+@property (nonatomic) CGSize cellPadding;
+@property (nonatomic) CGSize cellSize;
+@property (nonatomic, strong) UIView *gridFooterView;
+@property (nonatomic, strong) UIView *gridHeaderView;
+@property (nonatomic) KKGridViewLayoutDirection layoutDirection;
+@property (nonatomic, readonly) NSUInteger numberOfColumns;
+@property (nonatomic, readonly) NSUInteger numberOfSections;
+@property (nonatomic, readonly) BOOL batchUpdating;
+
+#pragma mark - Data Source and Delegate
+@property (nonatomic, kk_weak) IBOutlet id <KKGridViewDataSource> dataSource;
+@property (nonatomic, assign)  IBOutlet id <KKGridViewDelegate> delegate;
+
+#pragma mark - Getters
+
+- (KKGridViewCell *)dequeueReusableCellWithIdentifier:(NSString *)identifier;
+- (CGRect)rectForCellAtIndexPath:(KKIndexPath *)indexPath;
+- (NSArray *)visibleIndexPaths;
+
+- (KKIndexPath *)indexPathForCell:(KKGridViewCell *)cell;
+- (KKIndexPath *)indexPathForItemAtPoint:(CGPoint)point;
+- (NSArray *)indexPathsForItemsInRect:(CGRect)rect;
+
+#pragma mark - Reloading
+
+- (void)reloadContentSize;
+- (void)reloadData;
+
+#pragma mark - Editing
+
+- (void)beginUpdates;
+- (void)endUpdates;
+
+#pragma mark Individual Items
+
+- (void)reloadItemsAtIndexPaths:(NSArray *)indexPaths;
+- (void)insertItemsAtIndexPaths:(NSArray *)indexPaths withAnimation:(KKGridViewAnimation)animation;
+- (void)deleteItemsAtIndexPaths:(NSArray *)indexPaths withAnimation:(KKGridViewAnimation)animation;
+//- (void)moveItemAtIndexPath:(KKIndexPath *)indexPath toIndexPath:(KKIndexPath *)newIndexPath;
+- (void)scrollToItemAtIndexPath:(KKIndexPath *)indexPath animated:(BOOL)animated position:(KKGridViewScrollPosition)scrollPosition;
+
+#pragma mark - Unimplemented
+
+//- (void)insertSections:(NSIndexSet *)sections withItemAnimation:(KKGridViewAnimation)animation;
+//- (void)deleteSections:(NSIndexSet *)sections withItemAnimation:(KKGridViewAnimation)animation;
+//- (void)reloadSections:(NSIndexSet *)sections withAnimation:(KKGridViewAnimation)animation;
+
+#pragma mark - Selection
+
+- (void)selectItemsAtIndexPaths:(NSArray *)indexPaths animated:(BOOL)animated;
+- (void)deselectItemsAtIndexPaths:(NSArray *)indexPaths animated:(BOOL)animated;
+- (void)deselectAll: (BOOL)animated;
+- (NSUInteger)selectedItemCount;
+
+- (KKIndexPath *)indexPathForSelectedCell;
+- (NSArray *)indexPathsForSelectedCells;
+
 @end

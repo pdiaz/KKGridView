@@ -8,13 +8,21 @@
 
 #import "GridViewDemoViewController.h"
 #import <QuartzCore/QuartzCore.h>
+#import <AssetsLibrary/AssetsLibrary.h>
 #import <KKGridView/KKGridView.h>
 #import <KKGridView/KKGridViewCell.h>
 #import <KKGridView/KKIndexPath.h>
 
 static const NSUInteger kNumSection = 40;
 
-@implementation GridViewDemoViewController
+@implementation GridViewDemoViewController {
+    ALAssetsLibrary *_assetsLibrary;
+    NSMutableArray *_photoGroups;
+    NSMutableArray *_assets;
+    NSCache *_thumbnailCache;
+    dispatch_queue_t _imageQueue;
+}
+
 @synthesize firstSectionCount = _firstSectionCount;
 
 #pragma mark - View lifecycle
@@ -23,92 +31,95 @@ static const NSUInteger kNumSection = 40;
 {
     [super loadView];
     
-    _firstSectionCount = 7;
+    self.title = @"GridViewDemo - Photos";
     
-    UISearchBar *searchBar = [[UISearchBar alloc] initWithFrame:CGRectMake(0.f, 0.f, 320.f, 44.f)];
-    searchBar.barStyle = UIBarStyleBlackTranslucent;
-    searchBar.delegate = self;
-    searchBar.showsCancelButton = YES;
-    searchBar.userInteractionEnabled = YES;
-    self.gridView.gridHeaderView = searchBar;
+    UIView *backgroundView = [[UIView alloc] init];
+    backgroundView.backgroundColor = [UIColor scrollViewTexturedBackgroundColor];
+    self.gridView.backgroundView = backgroundView;
     
-    UIView *footerView = [[UIView alloc] initWithFrame:CGRectMake(0.f, 0.f, 20.f, 50.f)];
-    footerView.backgroundColor = [UIColor darkGrayColor];
-    self.gridView.gridFooterView = footerView;
-    
-    self.navigationController.toolbarHidden = NO;
-    self.navigationController.navigationBarHidden = YES;
-    self.navigationController.toolbar.tintColor = [UIColor darkGrayColor];
-    
-    UIBarButtonItem *spacer = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemFlexibleSpace target:nil action:nil];
-    UIBarButtonItem *add = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemAdd target:self action:@selector(addItems:)];
-    UIBarButtonItem *remove = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemTrash target:self action:@selector(removeItems:)];
-    UIBarButtonItem *multiple = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemAction target:self action:@selector(toggleSelectionStyle:)];
-    UIBarButtonItem *move = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemOrganize target:self action:@selector(moveItems:)];
-    
-    self.toolbarItems = [NSArray arrayWithObjects:add, spacer, remove, spacer, move, spacer, multiple, nil];
+    //    Create the assets library object; retain it to deal with iOS's retardation.
+    _assetsLibrary = [[ALAssetsLibrary alloc] init];
+    //    Enumerate through the user's photos.
+    [_assetsLibrary enumerateGroupsWithTypes:ALAssetsGroupAll usingBlock:^(ALAssetsGroup *group, BOOL *stop) {
+        
+        if (!_photoGroups)
+            _photoGroups = [[NSMutableArray alloc] init];
+        
+        if (group)
+            [_photoGroups addObject:group];
+        else {
+            for (ALAssetsGroup *group in _photoGroups) {
+                if (!_assets)
+                    _assets = [[NSMutableArray alloc] init];
+                
+                //                More enumeration bullshit.
+                NSMutableArray *tempArray = [[NSMutableArray alloc] init];
+                [group enumerateAssetsUsingBlock:^(ALAsset *result, NSUInteger index, BOOL *stop) {
+                    if (result)
+                        [tempArray addObject:result];
+                    else
+                        [_assets addObject:tempArray];
+                }];
+            }
+            [self.gridView reloadData];
+            _imageQueue = dispatch_queue_create("com.kolinkrewinkel.GridViewDemo", NULL);
+            
+            dispatch_sync(_imageQueue, ^(void) {
+                if (!_thumbnailCache)
+                    _thumbnailCache = [[NSCache alloc] init]; // Thanks @indragie.
+                
+                NSUInteger section = 0;
+                for (NSMutableArray *array in _assets) {
+                    NSUInteger index = 0;
+                    for (ALAsset *asset in array) {
+                        [_thumbnailCache setObject:[UIImage imageWithCGImage:[asset thumbnail]] forKey:asset]; // Store it!
+                        dispatch_async(dispatch_get_main_queue(), ^{
+                            [self.gridView reloadItemsAtIndexPaths:[NSArray arrayWithObject:[KKIndexPath indexPathForIndex:index inSection:section]]];
+                        });
+                        index++;
+                    }
+                    section++;
+                }
+            });
+        }
+        
+    } failureBlock:^(NSError *error) {
+        //        I can't help you here, son.
+        UIAlertView *alert = [[UIAlertView alloc] initWithTitle:@"LOLWAT" message:[NSString stringWithFormat:@"%@", [error localizedDescription]] delegate:nil cancelButtonTitle:@"Dismiss" otherButtonTitles:nil];
+        [alert show];
+    }];
 }
 
 #pragma mark - KKGridViewDataSource
 
 - (NSUInteger)numberOfSectionsInGridView:(KKGridView *)gridView
 {
-    return kNumSection;
+    return _photoGroups.count;
 }
 
 - (NSUInteger)gridView:(KKGridView *)gridView numberOfItemsInSection:(NSUInteger)section
 {
-    switch (section) {
-        case 0:
-            return self.firstSectionCount;
-            break;
-        case 1:
-            return 15;
-            break;
-        case 2:
-            return 10;
-            break;
-        case 3:
-            return 5;
-            break;
-        default:
-            return (section % 2) ? 4 : 7;
-            break;
-    }
+    return [[_photoGroups objectAtIndex:section] numberOfAssets];
 }
 
 - (KKGridViewCell *)gridView:(KKGridView *)gridView cellForItemAtIndexPath:(KKIndexPath *)indexPath
 {
     KKGridViewCell *cell = [KKGridViewCell cellForGridView:gridView];
-    if (indexPath.index % 2) {
-        cell.accessoryType = KKGridViewCellAccessoryTypeUnread;
-    } else {
-        cell.accessoryType = KKGridViewCellAccessoryTypeReadPartial;
-    }
-    cell.accessoryPosition = KKGridViewCellAccessoryPositionTopLeft;
-    cell.contentView.backgroundColor = [UIColor lightGrayColor];
     
-    return cell; 
+    ALAsset *asset = [[_assets objectAtIndex:indexPath.section] objectAtIndex:indexPath.index];
+    cell.imageView.image = [_thumbnailCache objectForKey:asset];
+    
+    return cell;
 }
 
 - (CGFloat)gridView:(KKGridView *)gridView heightForHeaderInSection:(NSUInteger)section
 {
-    return 25.f;
-}
-
-- (CGFloat)gridView:(KKGridView *)gridView heightForFooterInSection:(NSUInteger)section
-{
-    return 25.f;
+    return 23.f;
 }
 
 - (NSString *)gridView:(KKGridView *)gridView titleForHeaderInSection:(NSUInteger)section
 {
-    return [NSString stringWithFormat:@"Header %i",section];
-}
-
-- (NSString *)gridView:(KKGridView *)gridView titleForFooterInSection:(NSUInteger)section
-{
-    return [NSString stringWithFormat:@"Footer %i",section];
+    return [[_photoGroups objectAtIndex:section] valueForProperty:ALAssetsGroupPropertyName];
 }
 
 - (NSArray *)sectionIndexTitlesForGridView:(KKGridView *)gridView {
@@ -144,13 +155,13 @@ static const NSUInteger kNumSection = 40;
     }
 }
 
-- (void)moveItems:(id)sender
-{
-//    NSUInteger num = (arc4random() % 1) + 2;
-    KKIndexPath *indexPath = [KKIndexPath indexPathForIndex:1 inSection:0];
-    KKIndexPath *destinationPath = /*num == 1 ?*/ [KKIndexPath indexPathForIndex:2 inSection:0] /*: [KKIndexPath indexPathForIndex:2 inSection:2]*/;
-    [self.gridView moveItemAtIndexPath:indexPath toIndexPath:destinationPath];
-}
+//- (void)moveItems:(id)sender
+//{
+////    NSUInteger num = (arc4random() % 1) + 2;
+//    KKIndexPath *indexPath = [KKIndexPath indexPathForIndex:1 inSection:0];
+//    KKIndexPath *destinationPath = /*num == 1 ?*/ [KKIndexPath indexPathForIndex:2 inSection:0] /*: [KKIndexPath indexPathForIndex:2 inSection:2]*/;
+//    [self.gridView moveItemAtIndexPath:indexPath toIndexPath:destinationPath];
+//}
 
 - (void)toggleSelectionStyle:(id)sender
 {
@@ -162,13 +173,15 @@ static const NSUInteger kNumSection = 40;
 
 - (BOOL)shouldAutorotateToInterfaceOrientation:(UIInterfaceOrientation)interfaceOrientation
 {
+    //    Please have your app conform to this.
+    
     if (UI_USER_INTERFACE_IDIOM() == UIUserInterfaceIdiomPad)
         return YES;
     
     return (interfaceOrientation != UIInterfaceOrientationPortraitUpsideDown);
 }
 
-- (void) willAnimateRotationToInterfaceOrientation:(UIInterfaceOrientation)toInterfaceOrientation duration:(NSTimeInterval)duration
+- (void)willAnimateRotationToInterfaceOrientation:(UIInterfaceOrientation)toInterfaceOrientation duration:(NSTimeInterval)duration
 {
     CATransition *fadeTransition = [CATransition animation];
     fadeTransition.duration = duration;

@@ -11,8 +11,8 @@ static UIColor *backgroundColor = nil;
 static UIColor *fontColor = nil;
 static UIFont *font = nil;
 
-#define KKGridViewIndexViewPadding 7.0
-#define KKGridViewIndexViewMargin 7.0
+static CGFloat const KKGridViewIndexViewPadding = 7.0;
+static CGFloat const KKGridViewIndexViewMargin = 7.0;
 
 @interface KKGridViewIndexView () {
     NSUInteger _lastTrackingSection;
@@ -27,16 +27,19 @@ static UIFont *font = nil;
 
 + (void)initialize {
     if (self == [KKGridViewIndexView class]) {
-        backgroundColor = [UIColor colorWithWhite:0.0 alpha:0.25];
-        fontColor = [UIColor colorWithWhite:0.0 alpha:0.75];
-        font = [UIFont boldSystemFontOfSize:12.0];
+        static dispatch_once_t onceToken;
+        dispatch_once(&onceToken, ^{
+            backgroundColor = [UIColor colorWithWhite:0.0 alpha:0.25];
+            fontColor = [UIColor colorWithWhite:0.0 alpha:0.75];
+            font = [UIFont boldSystemFontOfSize:12.0];
+        });
     }
 }
 
 - (id)initWithFrame:(CGRect)frame {
     if (self = [super initWithFrame:frame]) {
-        [self setOpaque:NO];
-        [self setAutoresizingMask:(UIViewAutoresizingFlexibleLeftMargin | UIViewAutoresizingFlexibleHeight)];
+        self.opaque = NO;
+        self.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin | UIViewAutoresizingFlexibleHeight;
     }
     
     return self;
@@ -46,24 +49,26 @@ static UIFont *font = nil;
     
     // If tracking, draw background
     if (_tracking) {
-        [backgroundColor set];    
-        UIBezierPath *path = [UIBezierPath bezierPathWithRoundedRect:CGRectInset(self.bounds, KKGridViewIndexViewMargin, KKGridViewIndexViewMargin)
-                                                        cornerRadius:(self.bounds.size.width-2*KKGridViewIndexViewMargin)/2];
-        [path fill];
+        [backgroundColor set];
+        
+        CGRect insetBounds = CGRectInset(self.bounds, KKGridViewIndexViewMargin, KKGridViewIndexViewMargin);
+        CGFloat radius = (self.bounds.size.width - 2*KKGridViewIndexViewMargin) / 2;
+        [[UIBezierPath bezierPathWithRoundedRect:insetBounds cornerRadius:radius] fill];
     }
     
     NSUInteger sections = [_sectionIndexTitles count];
-    CGFloat sectionHeight = (self.bounds.size.height - 2*KKGridViewIndexViewMargin)/sections;
+    CGFloat sectionHeight = (self.bounds.size.height - 2 * KKGridViewIndexViewMargin)/sections;
     CGFloat currentSectionTop = KKGridViewIndexViewMargin;
     
     // Draw the titles in the center of its section
-    CGSize currentTitleSize;
-    CGPoint drawingPoint;
     [fontColor set];
+    
     for (NSString *title in _sectionIndexTitles) {
-        currentTitleSize = [title sizeWithFont:font];
-        drawingPoint = CGPointMake(floorf(self.bounds.size.width/2-currentTitleSize.width/2),
-                                   floorf(currentSectionTop+(sectionHeight/2-currentTitleSize.height/2))),
+        CGSize currentTitleSize = [title sizeWithFont:font];
+        CGPoint drawingPoint = {
+            floorf(self.bounds.size.width / 2 - currentTitleSize.width / 2),
+            floorf(currentSectionTop + (sectionHeight / 2 - currentTitleSize.height / 2))
+        };
         
         [title drawAtPoint:drawingPoint withFont:font];
         currentSectionTop+=sectionHeight;
@@ -71,10 +76,11 @@ static UIFont *font = nil;
 }
 
 - (void)willMoveToSuperview:(UIView *)newSuperview {
-    [self setFrame:CGRectMake(newSuperview.bounds.size.width-self.frame.size.width,
-                              0.0,
-                              self.frame.size.width,
-                              newSuperview.bounds.size.height)];
+    self.frame = (CGRect) {
+        .origin.x = newSuperview.bounds.size.width - self.frame.size.width,
+        .size.width = self.frame.size.width,
+        .size.height = newSuperview.bounds.size.height
+    };
 }
 
 #pragma mark - Setters
@@ -84,19 +90,20 @@ static UIFont *font = nil;
     
     // Look for the largest title and set the width
     CGFloat maxWidth = 0.0;
-    CGFloat currentWidth = 0.0;
+    
     for (NSString *title in _sectionIndexTitles) {
-        currentWidth = [title sizeWithFont:font].width;
+        CGFloat currentWidth = [title sizeWithFont:font].width;
         
         if (currentWidth > maxWidth)
             maxWidth = currentWidth;
     }
     
-    [self setFrame:CGRectMake(self.frame.origin.x,
-                              self.frame.origin.x,
-                              maxWidth+(2*KKGridViewIndexViewPadding+2*KKGridViewIndexViewMargin),
-                              self.frame.size.height)];
+    CGSize size = { 
+        maxWidth + 2*KKGridViewIndexViewPadding + 2*KKGridViewIndexViewMargin,
+        self.frame.size.height
+    };
     
+    self.frame = (CGRect){self.frame.origin, size};
     [self setNeedsDisplay];
 }
 
@@ -107,8 +114,8 @@ static UIFont *font = nil;
     if (_tracking && CGRectContainsPoint(self.bounds, location)) {
         NSUInteger sections = [_sectionIndexTitles count];
         CGFloat sectionHeight = (self.bounds.size.height - 2*KKGridViewIndexViewMargin)/sections;
-        location.y-=KKGridViewIndexViewMargin;
-    
+        location.y -= KKGridViewIndexViewMargin;
+        
         _lastTrackingSection = floorf(abs(location.y)/sectionHeight);
         
         if (_lastTrackingSection == _sectionIndexTitles.count)
@@ -116,8 +123,8 @@ static UIFont *font = nil;
         
         if (_sectionTracked)
             _sectionTracked(_lastTrackingSection);
-
     }
+    
     [self setNeedsDisplay];
 }
 

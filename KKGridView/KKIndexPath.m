@@ -19,31 +19,44 @@
         _index = index;
         _section = section;
     }
-
+    
     return self;
 }
 
-- (NSComparisonResult)compare:(id)object
+- (NSComparisonResult)compare:(KKIndexPath *)otherIndexPath
 {
-    KKIndexPath *otherIndexPath = (KKIndexPath *)object;
-//  Identical comparison
+    // Identical comparison
     if (otherIndexPath.section == self.section && otherIndexPath.index == self.index) {
         return NSOrderedSame;
     }
-//  Sectional comparison
+    
+    // Sectional comparison
     if (otherIndexPath.section > self.section) {
         return NSOrderedAscending;
     } else if (otherIndexPath.section < self.section) {
         return NSOrderedDescending;
     }
-//  Inter-section index comparison
+    
+    // Inter-section index comparison
     if (otherIndexPath.index > self.index) {
         return NSOrderedAscending;
     } else if (otherIndexPath.index < self.index) {
         return NSOrderedDescending;
     }
-//  No result could be found (this should never happen, kept in to keep the compiler happy)
+    
+    // No result could be found (this should never happen, kept in to keep the compiler happy)
     return NSOrderedSame;
+}
+
++ (NSArray *)indexPathsWithNSIndexPaths:(NSArray *)indexPaths
+{
+    NSMutableArray *convertedIndexPaths = [NSMutableArray array];
+
+    for (NSIndexPath *indexPath in indexPaths) {
+        [convertedIndexPaths addObject:[self indexPathWithNSIndexPath:indexPath]];
+    }
+
+    return convertedIndexPaths;
 }
 
 + (id)indexPathForIndex:(NSUInteger)index inSection:(NSUInteger)section
@@ -54,7 +67,6 @@
 - (id)initWithNSIndexPath:(NSIndexPath *)indexPath 
 {
     if ((self = [super init])) {
-//      Simple name change/assignment..
         self.index = indexPath.row;
         self.section = indexPath.section;
     }
@@ -67,10 +79,12 @@
     return [[self alloc] initWithNSIndexPath:indexPath];
 }
 
-- (BOOL)isEqual:(id)object
+- (BOOL)isEqual:(KKIndexPath *)indexPath
 {
-    KKIndexPath *indexPath = (KKIndexPath *)object;    
-    return (indexPath.index == self.index && indexPath.section == self.section);
+    if (indexPath == self)
+        return YES;
+
+    return (indexPath->_index == _index && indexPath->_section == _section);
 }
 
 - (NSUInteger)hash
@@ -82,18 +96,49 @@
 
 - (id)copyWithZone:(NSZone *)zone
 {
-    return [[[self class] alloc] initWithIndex:_index section:_section];
+    KKIndexPath *indexPath = [[[self class] alloc] init];
+    indexPath->_index = _index;
+    indexPath->_section = _section;
+    return indexPath;
 }
 
 - (NSString *)description
 {
-    return [NSString stringWithFormat:@"%@ {Index: %i; Section: %i}", NSStringFromClass([self class]), _index, _section];
+    return [NSString stringWithFormat:@"%@ {Index: %i; Section: %i}", 
+            NSStringFromClass([self class]), _index, _section];
 }
 
 #pragma mark - KKIndexPath to NSIndexPath
 
-- (NSIndexPath *)NSIndexPath {
-    return [NSIndexPath indexPathForRow:self.index inSection:self.section];
+- (NSIndexPath *)NSIndexPath
+{
+    return [NSIndexPath indexPathForRow:_index inSection:_section];
+}
+
+#pragma mark - Convenience
+
++ (KKIndexPath *)zeroIndexPath
+{
+	static KKIndexPath *indexPath = nil;
+    
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        indexPath = [[self alloc] initWithIndex:0 section:0];
+    });
+    
+	return indexPath;
+}
+
++ (KKIndexPath *)nonexistantIndexPath
+{
+	static KKIndexPath *indexPath = nil;
+    
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        indexPath = [[self alloc] initWithIndex:NSUIntegerMax section:NSUIntegerMax];
+    });
+    
+	return indexPath;
 }
 
 @end

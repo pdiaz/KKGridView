@@ -32,19 +32,31 @@
 
 + (id)updateWithIndexPath:(KKIndexPath *)indexPath isSectionUpdate:(BOOL)sectionUpdate type:(KKGridViewUpdateType)type animation:(KKGridViewAnimation)animation
 {
-    id retVal = [[[self class] alloc] initWithIndexPath:indexPath isSectionUpdate:sectionUpdate type:type animation:animation];
-    return retVal;
+    return [[self alloc] initWithIndexPath:indexPath 
+                           isSectionUpdate:sectionUpdate
+                                      type:type
+                                 animation:animation];
 }
 
 - (NSString *)description
 {
-    return [NSString stringWithFormat:@"KKGridViewUpdate - IndexPath: %@, Type: %d, Section Update: %i", _indexPath, _type, _sectionUpdate];
+    return [NSString stringWithFormat:@"KKGridViewUpdate - IndexPath: %@, Type: %d, Section Update: %i",
+            _indexPath, _type, _sectionUpdate];
 }
 
-- (BOOL)isEqual:(id)object
+- (BOOL)isEqual:(KKGridViewUpdate *)update
 {
-    KKGridViewUpdate *update = (KKGridViewUpdate *)object;
-    return ([_indexPath isEqual:update.indexPath] && _sectionUpdate == update.sectionUpdate && _type == update.type && _animation == update.animation);
+    return [_indexPath isEqual:update.indexPath] && _sectionUpdate == update.sectionUpdate && _type == update.type && _animation == update.animation;
+}
+
+- (KKGridViewUpdateSign)sign
+{
+    static BOOL const isNegative[KKGridViewUpdateTypeSectionReload + 1] = {
+        [KKGridViewUpdateTypeItemDelete] = YES,
+        [KKGridViewUpdateTypeSectionDelete] = YES
+    };
+
+    return isNegative[self.type] ? KKGridViewUpdateSignNegative : KKGridViewUpdateSignPositive;
 }
 
 - (NSUInteger)hash
